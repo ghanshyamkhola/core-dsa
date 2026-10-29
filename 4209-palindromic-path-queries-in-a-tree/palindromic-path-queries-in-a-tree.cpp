@@ -1,158 +1,86 @@
 class Solution {
 public:
-    vector<bool> palindromePath(int n, vector<vector<int>>& edges,
-                                string s, vector<string>& queries) {
+    vector<bool> palindromePath(int n, vector<vector<int>>& edges, string s, vector<string>& queries) {
         vector<vector<int>> adj(n);
+        for (auto& e : edges) { adj[e[0]].push_back(e[1]); adj[e[1]].push_back(e[0]); }
 
-        for (auto& e : edges) {
-            adj[e[0]].push_back(e[1]);
-            adj[e[1]].push_back(e[0]);
-        }
-
-        vector<int> parent(n, -1), depth(n, 0);
-        vector<int> sz(n, 1), heavy(n, -1);
-        vector<int> head(n), pos(n);
-        vector<int> order;
+        // iterative dfs: euler in/out times, parent, depth
+        vector<int> tin(n), tout(n), par(n, -1), dep(n, 0), order;
         order.reserve(n);
-
-        // Iterative traversal: calculate parent and depth.
-        vector<int> st = {0};
-        parent[0] = 0;
-
-        while (!st.empty()) {
-            int u = st.back();
-            st.pop_back();
-            order.push_back(u);
-
-            for (int v : adj[u]) {
-                if (v == parent[u]) continue;
-
-                parent[v] = u;
-                depth[v] = depth[u] + 1;
-                st.push_back(v);
+        {
+            vector<pair<int,int>> st = {{0, -1}};
+            int timer = 0;
+            while (!st.empty()) {
+                auto [u, p] = st.back(); st.pop_back();
+                if (p == -2) continue;
+                tin[u] = timer++; order.push_back(u);
+                par[u] = p; dep[u] = (p == -1) ? 0 : dep[p] + 1;
+                st.push_back({u, -2});
+                for (int v : adj[u]) if (v != p) st.push_back({v, u});
             }
         }
+        vector<int> sub(n, 1);
+        for (int i = n - 1; i >= 1; i--) sub[par[order[i]]] += sub[order[i]];
+        for (int i = 0; i < n; i++) tout[i] = tin[i] + sub[i]; // exclusive end of subtree
 
-        // Calculate subtree sizes and heavy children.
-        for (int i = n - 1; i >= 0; --i) {
-            int u = order[i];
-            int maxSize = 0;
-
-            for (int v : adj[u]) {
-                if (parent[v] != u) continue;
-
-                sz[u] += sz[v];
-
-                if (sz[v] > maxSize) {
-                    maxSize = sz[v];
-                    heavy[u] = v;
-                }
-            }
-        }
-
-        // Assign HLD positions.
-        int timer = 0;
-        vector<pair<int, int>> chains = {{0, 0}};
-
-        while (!chains.empty()) {
-            auto [start, h] = chains.back();
-            chains.pop_back();
-
-            for (int u = start; u != -1; u = heavy[u]) {
-                head[u] = h;
-                pos[u] = timer++;
-
-                for (int v : adj[u]) {
-                    if (parent[v] == u && v != heavy[u]) {
-                        chains.push_back({v, v});
-                    }
-                }
-            }
-        }
-
-        // Segment tree storing character parity masks.
-        int base = 1;
-        while (base < n) base <<= 1;
-
-        vector<int> seg(2 * base, 0);
-
-        for (int u = 0; u < n; ++u) {
-            seg[base + pos[u]] = 1 << (s[u] - 'a');
-        }
-
-        for (int i = base - 1; i > 0; --i) {
-            seg[i] = seg[i << 1] ^ seg[i << 1 | 1];
-        }
-
-        auto update = [&](int p, int val) {
-            p += base;
-            seg[p] = val;
-
-            for (p >>= 1; p > 0; p >>= 1) {
-                seg[p] = seg[p << 1] ^ seg[p << 1 | 1];
-            }
+        int LOG = 1; while ((1 << LOG) < n) LOG++;
+        vector<vector<int>> up(LOG, vector<int>(n));
+        for (int v = 0; v < n; v++) up[0][v] = (par[v] == -1) ? 0 : par[v];
+        for (int k = 1; k < LOG; k++)
+            for (int v = 0; v < n; v++) up[k][v] = up[k-1][up[k-1][v]];
+        auto lca = [&](int u, int v) -> int {
+            if (dep[u] < dep[v]) swap(u, v);
+            int d = dep[u] - dep[v];
+            for (int k = 0; k < LOG; k++) if (d >> k & 1) u = up[k][u];
+            if (u == v) return u;
+            for (int k = LOG - 1; k >= 0; k--)
+                if (up[k][u] != up[k][v]) { u = up[k][u]; v = up[k][v]; }
+            return par[u];
         };
 
-        auto rangeQuery = [&](int l, int r) {
-            int res = 0;
-
-            l += base;
-            r += base;
-
-            while (l <= r) {
-                if (l & 1) res ^= seg[l++];
-                if (!(r & 1)) res ^= seg[r--];
-
-                l >>= 1;
-                r >>= 1;
-            }
-
-            return res;
+        // 26 fenwicks over euler positions 1..n
+        // +1 at tin, -1 at tout: prefix(tin[u]) = char counts on root->u path
+        vector<array<int,26>> f(n + 1);
+        auto add = [&](int c, int i, int d) {
+            for (; i <= n; i += i & -i) f[i-1][c] += d;
         };
-
-        auto pathQuery = [&](int u, int v) {
-            int mask = 0;
-
-            while (head[u] != head[v]) {
-                if (depth[head[u]] < depth[head[v]]) {
-                    swap(u, v);
-                }
-
-                mask ^= rangeQuery(pos[head[u]], pos[u]);
-                u = parent[head[u]];
-            }
-
-            if (depth[u] > depth[v]) swap(u, v);
-
-            mask ^= rangeQuery(pos[u], pos[v]);
-
-            return mask;
+        auto ask = [&](int c, int i) -> int {
+            int r = 0;
+            for (; i > 0; i -= i & -i) r += f[i-1][c];
+            return r;
         };
+        for (int i = 0; i < n; i++) {
+            int c = s[i] - 'a';
+            add(c, tin[i] + 1, 1);
+            if (tout[i] < n) add(c, tout[i] + 1, -1); // write at n+1 would be unread, skip it
+        }
+        auto cnt = [&](int c, int u) { return ask(c, tin[u] + 1); };
 
         vector<bool> ans;
-
-        for (const string& q : queries) {
-            stringstream ss(q);
-            string op;
-            int u, v;
-
-            ss >> op >> u;
-
-            if (op == "update") {
-                char c;
-                ss >> c;
-
+        for (auto& q : queries) {
+            if (q[0] == 'u') {
+                int u = 0, i = 7;
+                while (q[i] != ' ') u = u * 10 + (q[i++] - '0');
+                char c = q.back();
+                add(s[u] - 'a', tin[u] + 1, -1);
+                if (tout[u] < n) add(s[u] - 'a', tout[u] + 1, 1);
                 s[u] = c;
-                update(pos[u], 1 << (c - 'a'));
+                add(c - 'a', tin[u] + 1, 1);
+                if (tout[u] < n) add(c - 'a', tout[u] + 1, -1);
             } else {
-                ss >> v;
-
-                int mask = pathQuery(u, v);
-
-                ans.push_back((mask & (mask - 1)) == 0);
+                int u = 0, v = 0, i = 6;
+                while (q[i] != ' ') u = u * 10 + (q[i++] - '0');
+                i++;
+                while (i < (int)q.size()) v = v * 10 + (q[i++] - '0');
+                int w = lca(u, v);
+                int odd = 0;
+                for (int c = 0; c < 26 && odd <= 1; c++) {
+                    int k = cnt(c, u) + cnt(c, v) - 2 * cnt(c, w) + (s[w] - 'a' == c);
+                    if (k & 1) odd++;
+                }
+                ans.push_back(odd <= 1);
             }
         }
-
         return ans;
     }
 };
